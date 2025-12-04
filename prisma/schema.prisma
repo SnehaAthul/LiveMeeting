@@ -1,0 +1,82 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:../db/custom.db"
+  
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String?
+  role      String   @default("user") // user, admin
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  // Relations
+  hostedMeetings Meeting[] @relation("MeetingHost")
+  participants   Participant[]
+}
+
+model Meeting {
+  id          String   @id @default(cuid())
+  title       String
+  description String?
+  roomName    String   @unique // LiveKit room name
+  hostId      String
+  isActive    Boolean  @default(true)
+  isRecording Boolean  @default(false)
+  startTime   DateTime @default(now())
+  endTime     DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  // Relations
+  host        User          @relation("MeetingHost", fields: [hostId], references: [id], onDelete: Cascade)
+  participants Participant[]
+  recordings  Recording[]
+}
+
+model Participant {
+  id          String   @id @default(cuid())
+  meetingId   String
+  userId      String?
+  identity    String   // LiveKit identity
+  name        String
+  role        String   // host, participant, viewer
+  permissions String   @default("participant") // participant, viewer
+  joinedAt    DateTime @default(now())
+  leftAt      DateTime?
+  
+  // Relations
+  meeting Meeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  user    User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+  
+  @@unique([meetingId, identity])
+}
+
+model Recording {
+  id          String   @id @default(cuid())
+  meetingId   String
+  egressId    String   // LiveKit egress ID
+  filename    String?
+  status      String   @default("starting") // starting, active, completed, failed
+  startTime   DateTime @default(now())
+  endTime     DateTime?
+  fileUrl     String?
+  fileSize    Int?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  // Relations
+  meeting Meeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+}

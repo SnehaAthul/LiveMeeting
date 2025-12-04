@@ -1,0 +1,17 @@
+port: 7880
+
+keys:
+  devkey: supersecretkey999999999999999999999999
+
+redis:
+  address: 127.0.0.1:6379
+
+rtc:
+  port_range_start: 50000
+  port_range_end: 50010
+
+room:
+  auto_create: true
+
+logging:
+  level: info

@@ -1,0 +1,7 @@
+api_key: devkey
+api_secret: supersecretkey999999999999999999999999
+ws_url: ws://127.0.0.1:7880
+redis:
+  address: 127.0.0.1:6379
+logging:
+  level: "info"
