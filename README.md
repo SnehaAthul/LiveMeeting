@@ -7,6 +7,9 @@ npm install
 # Start development server
 npm run dev
 
+# Open the built-in DB viewer
+npx prisma studio  
+
 # Build for production
 npm run build
 
