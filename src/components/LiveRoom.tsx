@@ -116,7 +116,7 @@ export function LiveRoom({
         });
 
         newRoom.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
-          console.log("Track subscribed:", track.kind, "from", participant.identity);
+          console.log("✅ Track subscribed:", track.kind, "from", participant.identity, "source:", publication.source);
 
           if (track.kind === Track.Kind.Video || track.kind === Track.Kind.ScreenShare) {
             // Attach to thumbnail
@@ -125,17 +125,43 @@ export function LiveRoom({
               track.attach(vid);
             }
 
-            // If this participant is pinned, also attach to main video
+            // CRITICAL: For screen shares, force immediate update to main view
+            if (publication.source === Track.Source.ScreenShare) {
+              console.log('🖥️ Screen share detected from', participant.identity);
+
+              // Force re-render to update main video
+              updateParticipantsList(newRoom);
+
+              // For recording bot, immediately attach screen share
+              if (isViewer && mainVideoRef.current) {
+                console.log('📹 Recording bot: Attaching screen share immediately');
+                setTimeout(() => {
+                  if (mainVideoRef.current && track) {
+                    track.attach(mainVideoRef.current);
+                  }
+                }, 100);
+              }
+            }
+
+            // If pinned participant, attach to main
             if (pinnedParticipant === participant.identity && mainVideoRef.current) {
               track.attach(mainVideoRef.current);
             }
           }
+
           updateParticipantsList(newRoom);
         });
 
-        newRoom.on(RoomEvent.TrackUnsubscribed, (track) => {
-          console.log("Track unsubscribed:", track.kind);
+        newRoom.on(RoomEvent.TrackUnsubscribed, (track, publication, participant) => {
+          console.log("Track unsubscribed:", track.kind, "source:", publication?.source);
           track.detach();
+
+          // If screen share ended, force update to switch back to camera
+          if (publication?.source === Track.Source.ScreenShare) {
+            console.log('🖥️ Screen share ended from', participant?.identity);
+            updateParticipantsList(newRoom);
+          }
+
           updateParticipantsList(newRoom);
         });
 
@@ -171,7 +197,7 @@ export function LiveRoom({
             updateParticipantsList(newRoom);
             return;
           }
-        
+
           if (publication.source === Track.Source.Camera) {
             console.log('Camera muted (local)');
             setIsVideoOff(true);
@@ -179,21 +205,21 @@ export function LiveRoom({
             console.log('Microphone muted (local)');
             setIsMuted(true);
           }
-        
+
           updateParticipantsList(newRoom);
         });
-        
+
         newRoom.on(RoomEvent.TrackUnmuted, (publication, participant) => {
           // Only update local UI state for *this* tab
           if (!participant.isLocal) {
             updateParticipantsList(newRoom);
             return;
           }
-        
+
           if (publication.source === Track.Source.Camera) {
             console.log('Camera unmuted (local)');
             setIsVideoOff(false);
-        
+
             // Re-attach to main video if pinned
             setTimeout(() => {
               if (publication.track && mainVideoRef.current) {
@@ -202,7 +228,7 @@ export function LiveRoom({
                 const isPinnedRemote =
                   publication.participant &&
                   pinnedParticipant === publication.participant.identity;
-        
+
                 if (isPinnedLocal || isPinnedRemote) {
                   console.log('Re-attaching camera to main after unmute');
                   publication.track.attach(mainVideoRef.current);
@@ -213,10 +239,10 @@ export function LiveRoom({
             console.log('Microphone unmuted (local)');
             setIsMuted(false);
           }
-        
+
           updateParticipantsList(newRoom);
         });
-        
+
 
         await newRoom.connect(serverUrl, token);
         setRoom(newRoom);
@@ -259,74 +285,92 @@ export function LiveRoom({
 
   useEffect(() => {
     if (!room || !mainVideoRef.current) return;
-  
+
     const run = async () => {
       const mainEl = mainVideoRef.current;
       if (!mainEl) return;
-  
-      // 1. Clear previous video content
+
+      // Clear previous content
       mainEl.srcObject = null;
       mainEl.removeAttribute('src');
       mainEl.load();
-  
-      // 2. Decide which participant should be in main view
+
       let participantToShow: any = null;
-  
+
+      // PRIORITY 1: Pinned participant
       if (pinnedParticipant) {
         if (room.localParticipant.identity === pinnedParticipant) {
           participantToShow = room.localParticipant;
         } else {
           participantToShow = room.remoteParticipants.get(pinnedParticipant);
         }
-      } else {
+      }
+      // PRIORITY 2: For recording bot, find screen share first
+      else if (isViewer) {
+        // Check ALL participants for active screen share
+        const allParticipants = [
+          ...Array.from(room.remoteParticipants.values())
+        ];
+
+        const screenShareParticipant = allParticipants.find(p => {
+          const hasScreenShare = Array.from(p.trackPublications.values()).some(
+            pub => pub.source === Track.Source.ScreenShare && pub.track && !pub.isMuted
+          );
+          return hasScreenShare;
+        });
+
+        if (screenShareParticipant) {
+          participantToShow = screenShareParticipant;
+          console.log('📹 Recording: Showing screen share from', screenShareParticipant.identity);
+        } else if (hostIdentity) {
+          participantToShow = room.remoteParticipants.get(hostIdentity);
+          console.log('📹 Recording: Showing host', hostIdentity);
+        } else {
+          participantToShow = allParticipants[0];
+          console.log('📹 Recording: Showing first participant');
+        }
+      }
+      // PRIORITY 3: For regular users
+      else {
         if (isHost) {
           participantToShow = room.localParticipant;
         } else {
-          participantToShow =
-            room.remoteParticipants.get(hostIdentity) ??
+          participantToShow = room.remoteParticipants.get(hostIdentity) ??
             Array.from(room.remoteParticipants.values())[0];
         }
       }
-  
+
       if (!participantToShow) return;
-  
-      // 3. Get all available tracks (screen-share and camera)
-      const publications = Array.from(
-        participantToShow.trackPublications.values(),
-      );
-  
-      // Priority: ScreenShare > Camera
+
+      // Get publications
+      const publications = Array.from(participantToShow.trackPublications.values());
+
+      // ALWAYS prefer screen share over camera
       const screenPub = publications.find(
-        (p) => p.source === Track.Source.ScreenShare && p.track && !p.isMuted,
+        p => p.source === Track.Source.ScreenShare && p.track && !p.isMuted
       );
-  
+
       const cameraPub = publications.find(
-        (p) => p.source === Track.Source.Camera && p.track && !p.isMuted,
+        p => p.source === Track.Source.Camera && p.track && !p.isMuted
       );
-  
-      // Choose which track to display
+
       const trackToAttach = (screenPub?.track as any) || (cameraPub?.track as any);
-  
+
       if (trackToAttach) {
-        console.log(
-          'Attaching to main:',
-          participantToShow.identity,
-          screenPub ? 'SCREEN' : 'CAMERA',
-        );
-  
-        // small delay to avoid race with DOM reset
-        await new Promise((resolve) => setTimeout(resolve, 30));
-  
+        const trackType = screenPub ? '🖥️ SCREEN' : '📷 CAMERA';
+        console.log('Attaching to main:', participantToShow.identity, trackType);
+
+        await new Promise(resolve => setTimeout(resolve, 50));
         trackToAttach.attach(mainEl);
       }
     };
-  
+
     run();
-  }, [pinnedParticipant, room, isHost, hostIdentity, participants]);
-  
+  }, [pinnedParticipant, room, isHost, hostIdentity, isViewer]);
+
 
   const updateParticipantsList = (currentRoom: Room) => {
-    const participantList: Participant[] = [
+    const newList: Participant[] = [
       {
         identity: currentRoom.localParticipant.identity,
         name: currentRoom.localParticipant.name || currentRoom.localParticipant.identity,
@@ -337,19 +381,29 @@ export function LiveRoom({
         isMuted: currentRoom.localParticipant.isMicrophoneEnabled === false,
         isVideoOff: currentRoom.localParticipant.isCameraEnabled === false,
       },
-      ...Array.from(currentRoom.remoteParticipants.values()).map((participant) => ({
-        identity: participant.identity,
-        name: participant.name || participant.identity,
-        isLocal: false,
-        isSpeaking: participant.isSpeaking,
-        videoTrack: participant.videoTrack || undefined,
-        audioTrack: participant.audioTrack || undefined,
-        isMuted: participant.isMicrophoneEnabled === false,
-        isVideoOff: participant.isCameraEnabled === false,
-      })),
+      ...Array.from(currentRoom.remoteParticipants.values())
+        .filter((participant) =>
+          !participant.identity.startsWith('recorder-bot') &&
+          !participant.identity.startsWith('recorder-')
+        )
+        .map((participant) => ({
+          identity: participant.identity,
+          name: participant.name || participant.identity,
+          isLocal: false,
+          isSpeaking: participant.isSpeaking,
+          videoTrack: participant.videoTrack || undefined,
+          audioTrack: participant.audioTrack || undefined,
+          isMuted: participant.isMicrophoneEnabled === false,
+          isVideoOff: participant.isCameraEnabled === false,
+        })),
     ];
 
-    setParticipants(participantList);
+    // only update state if list actually changed
+    setParticipants(prevList => {
+      const changed = JSON.stringify(prevList.map(p => p.identity)) !==
+        JSON.stringify(newList.map(p => p.identity));
+      return changed ? newList : prevList;
+    });
   };
 
   const toggleMicrophone = async () => {
