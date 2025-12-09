@@ -116,7 +116,7 @@ export function LiveRoom({
         });
 
         newRoom.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
-          console.log("✅ Track subscribed:", track.kind, "from", participant.identity, "source:", publication.source);
+          console.log("Track subscribed:", track.kind, "from", participant.identity, "source:", publication.source);
 
           if (track.kind === Track.Kind.Video || track.kind === Track.Kind.ScreenShare) {
             // Attach to thumbnail
@@ -158,7 +158,7 @@ export function LiveRoom({
 
           // If screen share ended, force update to switch back to camera
           if (publication?.source === Track.Source.ScreenShare) {
-            console.log('🖥️ Screen share ended from', participant?.identity);
+            console.log('Screen share ended from', participant?.identity);
             updateParticipantsList(newRoom);
           }
 
@@ -321,13 +321,13 @@ export function LiveRoom({
 
         if (screenShareParticipant) {
           participantToShow = screenShareParticipant;
-          console.log('📹 Recording: Showing screen share from', screenShareParticipant.identity);
+          console.log('Recording: Showing screen share from', screenShareParticipant.identity);
         } else if (hostIdentity) {
           participantToShow = room.remoteParticipants.get(hostIdentity);
-          console.log('📹 Recording: Showing host', hostIdentity);
+          console.log('Recording: Showing host', hostIdentity);
         } else {
           participantToShow = allParticipants[0];
-          console.log('📹 Recording: Showing first participant');
+          console.log('Recording: Showing first participant');
         }
       }
       // PRIORITY 3: For regular users
@@ -357,7 +357,7 @@ export function LiveRoom({
       const trackToAttach = (screenPub?.track as any) || (cameraPub?.track as any);
 
       if (trackToAttach) {
-        const trackType = screenPub ? '🖥️ SCREEN' : '📷 CAMERA';
+        const trackType = screenPub ? 'SCREEN' : 'CAMERA';
         console.log('Attaching to main:', participantToShow.identity, trackType);
 
         await new Promise(resolve => setTimeout(resolve, 50));
