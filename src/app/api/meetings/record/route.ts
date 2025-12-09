@@ -1,17 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { livekitConfig } from '@/lib/livekit';
-import { EgressClient } from 'livekit-server-sdk';
+import { EgressClient, AccessToken } from 'livekit-server-sdk';
 import path from 'path';
+import fs from 'fs';
 
-// const egressClient = new EgressClient(
-//   livekitConfig.wsUrl.replace('wss://', 'https://'),
-//   livekitConfig.apiKey,
-//   livekitConfig.apiSecret
-// );
-const egressUrl = livekitConfig.wsUrl
-  .replace('wss://', 'https://')
-  .replace('ws://', 'http://');
+const egressUrl = process.env.LIVEKIT_URL || 'http://localhost:7880';
+
+console.log('Egress Client Configuration:');
+console.log('- Egress URL:', egressUrl);
+console.log('- API Key:', livekitConfig.apiKey);
+console.log('- API Secret:', livekitConfig.apiSecret ? '***' + livekitConfig.apiSecret.slice(-4) : 'MISSING');
 
 const egressClient = new EgressClient(
   egressUrl,
@@ -21,10 +20,17 @@ const egressClient = new EgressClient(
 
 export async function POST(request: NextRequest) {
   try {
-    const { meetingId, participantId, action } = await request.json();
-    console.log("Meeting_____",meetingId);
+    const body = await request.json();
+    const { meetingId, participantId, action } = body;
+    
+    console.log("=== Recording Request ===");
+    console.log("Body:", body);
+    console.log("Meeting ID:", meetingId);
+    console.log("Participant ID:", participantId);
+    console.log("Action:", action);
 
     if (!meetingId || !participantId || !action) {
+      console.error("Missing required fields:", { meetingId, participantId, action });
       return NextResponse.json(
         { error: 'Meeting ID, participant ID, and action are required' },
         { status: 400 }
@@ -59,25 +65,77 @@ export async function POST(request: NextRequest) {
           { status: 400 }
         );
       }
-      const fileName = `${participant.meeting.roomName}-${Date.now()}.mp4`;
-      // const filePath = path.join(
-      //   process.cwd(),
-      //   'recordings',
-      //   fileName
-      // );
 
-      // Start recording with LiveKit Egress
-      const egressInfo = await egressClient.startRoomCompositeEgress(
-        participant.meeting.roomName,
+      const fileName = `${participant.meeting.roomName}-${Date.now()}.mp4`;
+      
+      // Ensure local recordings directory exists
+      const recordingsDir = path.join(process.cwd(), 'recordings');
+      if (!fs.existsSync(recordingsDir)) {
+        console.log('Creating recordings directory:', recordingsDir);
+        fs.mkdirSync(recordingsDir, { recursive: true });
+      }
+
+      // Docker container saves to /out, which is mapped to ./recordings
+      const dockerFilePath = `/out/${fileName}`;
+
+      // Create a special token for the recording bot
+      const botIdentity = `recorder-bot-${Date.now()}`;
+      const recordingToken = new AccessToken(
+        livekitConfig.apiKey,
+        livekitConfig.apiSecret,
         {
-          file: {
-            // filepath: filePath,
-            filepath: `/out/${fileName}`,
-            // filepath: `recordings/${participant.meeting.roomName}-${Date.now()}.mp4`,
-          },
-          layout: 'grid',
+          identity: botIdentity,
+          name: 'Recording Bot',
         }
       );
+
+      recordingToken.addGrant({
+        room: participant.meeting.roomName,
+        roomJoin: true,
+        canPublish: false,
+        canSubscribe: true,
+        canPublishData: false,
+        hidden: true, // This hides the recording bot from participant list
+      });
+
+      const token = await recordingToken.toJwt();
+
+      //Build the URL to your recording page
+      const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+      const recordingUrl = `${appUrl}/meeting/${participant.meeting.roomName}/record?token=${encodeURIComponent(token)}&host=${encodeURIComponent(participant.meeting.hostIdentity || participant.identity)}`;
+
+      console.log('=== Starting Recording ===');
+      console.log('Recording URL:', recordingUrl);
+      console.log('Docker file path:', dockerFilePath);
+      console.log('Room name:', participant.meeting.roomName);
+      console.log('Bot identity:', botIdentity);
+      console.log('App URL:', appUrl);
+
+      // Test if the URL is accessible
+      try {
+        const testResponse = await fetch(recordingUrl, { method: 'HEAD' });
+        console.log('URL accessibility test:', testResponse.ok ? 'SUCCESS' : 'FAILED');
+        console.log('URL status:', testResponse.status);
+      } catch (e) {
+        console.error('URL accessibility test failed:', e);
+      }
+
+      //Use Web Egress with optimized settings for meeting recording
+      const egressInfo = await egressClient.startWebEgress(
+        recordingUrl,
+        {
+          file: {
+            filepath: dockerFilePath,
+          },
+          width: 1920,
+          height: 1080,
+          audioOnly: false,
+          videoOnly: false,
+          awaitStartSignal: false,
+        }
+      );
+
+      console.log('Web Egress started:', egressInfo.egressId);
 
       // Save recording to database
       const recording = await db.recording.create({
@@ -103,6 +161,8 @@ export async function POST(request: NextRequest) {
           id: recording.id,
           egressId: recording.egressId,
           status: recording.status,
+          filename: fileName,
+          type: 'web-egress',
         },
       });
 
@@ -122,6 +182,8 @@ export async function POST(request: NextRequest) {
         );
       }
 
+      console.log('Stopping recording:', activeRecording.egressId);
+
       // Stop recording with LiveKit Egress
       await egressClient.stopEgress(activeRecording.egressId);
 
@@ -140,12 +202,30 @@ export async function POST(request: NextRequest) {
         data: { isRecording: false },
       });
 
+      // Wait a moment for file to be written
+      await new Promise(resolve => setTimeout(resolve, 2000));
+
+      // Check if file exists
+      const recordingsDir = path.join(process.cwd(), 'recordings');
+      const localFilePath = path.join(recordingsDir, activeRecording.filename);
+      const fileExists = fs.existsSync(localFilePath);
+      
+      console.log('Recording stopped');
+      console.log('Expected file path:', localFilePath);
+      console.log('File exists:', fileExists);
+      if (fileExists) {
+        const stats = fs.statSync(localFilePath);
+        console.log('File size:', stats.size, 'bytes');
+      }
+
       return NextResponse.json({
         message: 'Recording stopped',
         recording: {
           id: activeRecording.id,
           egressId: activeRecording.egressId,
           status: 'completed',
+          filename: activeRecording.filename,
+          fileExists,
         },
       });
 
@@ -159,7 +239,7 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     console.error('Error controlling recording:', error);
     return NextResponse.json(
-      { error: 'Failed to control recording' },
+      { error: 'Failed to control recording', details: error instanceof Error ? error.message : 'Unknown error' },
       { status: 500 }
     );
   }

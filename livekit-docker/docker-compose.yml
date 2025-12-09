@@ -24,8 +24,12 @@ services:
     restart: unless-stopped
     environment:
       - EGRESS_CONFIG_FILE=/egress.yaml
+      - CHROME_DEVEL_SANDBOX=/usr/local/sbin/chrome-devel-sandbox
     volumes:
       - ./egress.yaml:/egress.yaml
       - ./recordings:/out
+    shm_size: 2gb
     depends_on:
       - livekit
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
