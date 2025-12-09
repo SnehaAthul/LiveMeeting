@@ -5,7 +5,6 @@ import { EgressClient, AccessToken } from 'livekit-server-sdk';
 import path from 'path';
 import fs from 'fs';
 
-// ✅ FIX: Use correct URL for local LiveKit server
 const egressUrl = process.env.LIVEKIT_URL || 'http://localhost:7880';
 
 console.log('Egress Client Configuration:');
@@ -101,7 +100,7 @@ export async function POST(request: NextRequest) {
 
       const token = await recordingToken.toJwt();
 
-      // ✅ Build the URL to your recording page
+      //Build the URL to your recording page
       const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
       const recordingUrl = `${appUrl}/meeting/${participant.meeting.roomName}/record?token=${encodeURIComponent(token)}&host=${encodeURIComponent(participant.meeting.hostIdentity || participant.identity)}`;
 
@@ -121,7 +120,7 @@ export async function POST(request: NextRequest) {
         console.error('URL accessibility test failed:', e);
       }
 
-      // ✅ Use Web Egress with optimized settings for meeting recording
+      //Use Web Egress with optimized settings for meeting recording
       const egressInfo = await egressClient.startWebEgress(
         recordingUrl,
         {
